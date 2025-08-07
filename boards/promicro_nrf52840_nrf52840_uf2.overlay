@@ -1,0 +1,88 @@
+/ {
+	aliases {
+		led0 = &led0;
+	};
+	
+	chosen {
+		zephyr,display = &ssd1306_ssd1306_128x64;
+	};
+	
+	buttons {
+		compatible = "gpio-keys";
+		button0:button0	 {
+			label = "Select channel 0";
+			gpios = <&gpio1 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+		button1:button1 {
+			label = "Select channel 1";
+			gpios = <&gpio1 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+		button2:button2 {
+			label = "Select channel 2";
+			gpios = <&gpio1 11 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+	};
+	
+	leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+			label = "Red LED";
+		};
+	};
+};
+
+&i2c0{
+	status = "okay";
+	
+	ina0:ina219@40 {
+		status = "okay";
+		compatible = "ti,ina219";
+		reg = <0x40>;
+		brng = <0>;
+		pg = <0>;
+		sadc = <13>;
+		badc = <13>;
+		shunt-milliohm = <100>;
+		lsb-microamp = <10>;
+	};
+	
+	ina1:ina219@41 {
+		status = "okay";
+		compatible = "ti,ina219";
+		reg = <0x41>;
+		brng = <0>;
+		pg = <0>;
+		sadc = <13>;
+		badc = <13>;
+		shunt-milliohm = <100>;
+		lsb-microamp = <10>;
+	};
+	
+	ina2:ina219@44 {
+		status = "okay";
+		compatible = "ti,ina219";
+		reg = <0x44>;
+		brng = <0>;
+		pg = <0>;
+		sadc = <13>;
+		badc = <13>;
+		shunt-milliohm = <100>;
+		lsb-microamp = <10>;
+	};
+	
+	ssd1306_ssd1306_128x64: ssd1306@3c {
+		compatible = "solomon,ssd1306fb";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		inversion-on;
+		prechargep = <0x22>;
+	};
+};
