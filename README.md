@@ -34,12 +34,32 @@ west build -b promicro_nrf52840/nrf52840/uf2
 west flash
 ```
 
+## OpenThread
+For now, for the device to join a network you must:
+
+1. Go to your OTBR or any router with commissioner functionality
+    ```bash
+    $ sudo ot-ctl
+    commissioner start
+    commissioner joiner add * 998877
+    ```
+2. Go to the USB PD PSU device's shell
+    ```bash
+    usb-pd-psu> ot thread stop
+    usb-pd-psu> ot joiner start 998877
+
+    # after joining finished
+
+    usb-pd-psu> kernell reboot
+    ```
+
 ## Tasks
-- [ ] Add OpenThread connectivity and shell
-- [ ] Add CoAP support for remote measurement readout
-- [x] Add button support to switch screens
+- [ ] GUI screen for OT joiner
+- [ ] CoAP support for remote measurement readout
+- [x] OpenThread connectivity and shell
+- [x] Button support to switch screens
 - [x] Create basic LVGL GUI
-- [x] Add SSD1306 support
+- [x] SSD1306 support
 - [x] Read measurements of each channel
 
 ## Copyright
