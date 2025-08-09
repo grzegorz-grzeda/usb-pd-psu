@@ -20,13 +20,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 #
-cmake_minimum_required(VERSION 3.30.0)
-
-find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-
-project(usb-pd-psu 
-    VERSION 0.0.1
-    LANGUAGES C
+target_include_directories(app 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-add_subdirectory(src)
+target_sources(app 
+    PRIVATE main.c
+    PRIVATE measurement.c
+    PRIVATE buttons.c
+)

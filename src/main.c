@@ -23,13 +23,13 @@
  */
 //----------------------------------------------------------------------------------------------------------------------
 #include <lvgl.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <zephyr/drivers/display.h>
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/i2c.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/shell/shell.h>
+#include "buttons.h"
+#include "measurement.h"
 //----------------------------------------------------------------------------------------------------------------------
 typedef struct {
     lv_obj_t* sensor_screen;
@@ -47,47 +47,23 @@ typedef struct {
 //----------------------------------------------------------------------------------------------------------------------
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 //----------------------------------------------------------------------------------------------------------------------
-const struct device* const inas[] = {
-    DEVICE_DT_GET(DT_NODELABEL(ina0)),
-    DEVICE_DT_GET(DT_NODELABEL(ina1)),
-    DEVICE_DT_GET(DT_NODELABEL(ina2)),
-};
-//----------------------------------------------------------------------------------------------------------------------
 static uint8_t active_screen_index = 0;
-static ui_channel_screen_t screens[sizeof(inas) / sizeof(inas[0])] = {0};
+static ui_channel_screen_t* screens = NULL;
+static size_t screen_count = 0;
+static lv_timer_t* lvgl_timer;
 //----------------------------------------------------------------------------------------------------------------------
-#define BUTTON0_NODE DT_NODELABEL(button0)
-#define BUTTON1_NODE DT_NODELABEL(button1)
-#define BUTTON2_NODE DT_NODELABEL(button2)
-
-static const struct gpio_dt_spec button0_spec = GPIO_DT_SPEC_GET_OR(BUTTON0_NODE, gpios, {0});
-static const struct gpio_dt_spec button1_spec = GPIO_DT_SPEC_GET_OR(BUTTON1_NODE, gpios, {0});
-static const struct gpio_dt_spec button2_spec = GPIO_DT_SPEC_GET_OR(BUTTON2_NODE, gpios, {0});
-
-static struct gpio_callback button0_cb;
-static struct gpio_callback button1_cb;
-static struct gpio_callback button2_cb;
-//----------------------------------------------------------------------------------------------------------------------
-static void timer_callback(lv_timer_t* timer) {
-    struct sensor_value voltage, current, power;
-    if (sensor_sample_fetch(inas[active_screen_index]) < 0) {
-        LOG_ERR("Failed to fetch sample from %s", inas[active_screen_index]->name);
-        return;
+static int create_ui(size_t screen_cnt) {
+    const struct device* display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+    if (!device_is_ready(display_dev)) {
+        LOG_ERR("Display device not ready, aborting");
+        return -1;
     }
 
-    if (sensor_channel_get(inas[active_screen_index], SENSOR_CHAN_VOLTAGE, &voltage) < 0 ||
-        sensor_channel_get(inas[active_screen_index], SENSOR_CHAN_CURRENT, &current) < 0 ||
-        sensor_channel_get(inas[active_screen_index], SENSOR_CHAN_POWER, &power) < 0) {
-        LOG_ERR("Failed to get sensor data from %s", inas[active_screen_index]->name);
-        return;
+    if (screen_cnt == 0) {
+        LOG_ERR("No measurement channels defined");
+        return -1;
     }
 
-    lv_label_set_text_fmt(screens[active_screen_index].voltage_label, "%d.%03d", voltage.val1, voltage.val2 / 1000);
-    lv_label_set_text_fmt(screens[active_screen_index].current_label, "%d.%03d", current.val1, current.val2 / 1000);
-    lv_label_set_text_fmt(screens[active_screen_index].power_label, "%d.%03d", power.val1, power.val2 / 1000);
-}
-//----------------------------------------------------------------------------------------------------------------------
-static void create_ui(void) {
     static lv_style_t style_dark;
     lv_style_init(&style_dark);
 
@@ -98,7 +74,14 @@ static void create_ui(void) {
     lv_style_set_border_color(&style_dark, lv_color_black());
     lv_style_set_outline_color(&style_dark, lv_color_black());
 
-    for (size_t i = 0; i < ARRAY_SIZE(screens); i++) {
+    screen_count = screen_cnt;
+    screens = calloc(screen_count, sizeof(ui_channel_screen_t));
+    if (!screens) {
+        LOG_ERR("Failed to allocate memory for screens");
+        return -1;
+    }
+
+    for (size_t i = 0; i < screen_count; i++) {
         screens[i].sensor_screen = lv_obj_create(NULL);
         lv_obj_add_style(screens[i].sensor_screen, &style_dark, 0);
         lv_obj_set_size(screens[i].sensor_screen, LV_HOR_RES, LV_VER_RES);
@@ -143,14 +126,18 @@ static void create_ui(void) {
     }
 
     lv_screen_load(screens[active_screen_index].sensor_screen);
+
+    lv_timer_handler();
+    display_blanking_off(display_dev);
+    return 0;
 }
 //----------------------------------------------------------------------------------------------------------------------
-static void button_handler(const struct device* dev, struct gpio_callback* cb, uint32_t pins) {
-    if ((pins & BIT(button0_spec.pin)) && (dev == button0_spec.port) && (active_screen_index != 0)) {
+static void buttons_activated_callback(int button_index, void* userdata) {
+    if (button_index == 0 && active_screen_index != 0) {
         active_screen_index = 0;
-    } else if ((pins & BIT(button1_spec.pin)) && (dev == button1_spec.port) && (active_screen_index != 1)) {
+    } else if (button_index == 1 && active_screen_index != 1) {
         active_screen_index = 1;
-    } else if ((pins & BIT(button2_spec.pin)) && (dev == button2_spec.port) && (active_screen_index != 2)) {
+    } else if (button_index == 2 && active_screen_index != 2) {
         active_screen_index = 2;
     } else {
         return;
@@ -158,53 +145,64 @@ static void button_handler(const struct device* dev, struct gpio_callback* cb, u
     lv_screen_load(screens[active_screen_index].sensor_screen);
 }
 //----------------------------------------------------------------------------------------------------------------------
-static void configure_buttons(void) {
-    if (!gpio_is_ready_dt(&button0_spec) || !gpio_is_ready_dt(&button1_spec) || !gpio_is_ready_dt(&button2_spec)) {
-        LOG_ERR("Button GPIOs not ready");
+static void measurement_callback(const measurement_channel_t* const channels, size_t channel_count, void* userdata) {
+    if (channel_count != screen_count) {
+        LOG_ERR("Channel count mismatch: expected %zu, got %zu", screen_count, channel_count);
         return;
     }
-    gpio_pin_configure_dt(&button0_spec, GPIO_INPUT | GPIO_PULL_UP);
-    gpio_pin_configure_dt(&button1_spec, GPIO_INPUT | GPIO_PULL_UP);
-    gpio_pin_configure_dt(&button2_spec, GPIO_INPUT | GPIO_PULL_UP);
 
-    gpio_pin_interrupt_configure_dt(&button0_spec, GPIO_INT_EDGE_TO_ACTIVE);
-    gpio_pin_interrupt_configure_dt(&button1_spec, GPIO_INT_EDGE_TO_ACTIVE);
-    gpio_pin_interrupt_configure_dt(&button2_spec, GPIO_INT_EDGE_TO_ACTIVE);
-
-    gpio_init_callback(&button0_cb, button_handler, BIT(button0_spec.pin));
-    gpio_init_callback(&button1_cb, button_handler, BIT(button1_spec.pin));
-    gpio_init_callback(&button2_cb, button_handler, BIT(button2_spec.pin));
-
-    if (gpio_add_callback(button0_spec.port, &button0_cb) < 0) {
-        LOG_ERR("Failed to add button callback");
-        return;
+    for (size_t i = 0; i < channel_count; i++) {
+        if (!channels[i].ok) {
+            lv_label_set_text(screens[i].voltage_label, "N/A");
+            lv_label_set_text(screens[i].current_label, "N/A");
+            lv_label_set_text(screens[i].power_label, "N/A");
+            continue;
+        }
+        char buffer[32];
+        sprintf(buffer, "%.3f", channels[i].voltage);
+        lv_label_set_text(screens[i].voltage_label, buffer);
+        sprintf(buffer, "%.3f", channels[i].current);
+        lv_label_set_text(screens[i].current_label, buffer);
+        sprintf(buffer, "%.3f", channels[i].power);
+        lv_label_set_text(screens[i].power_label, buffer);
     }
-    if (gpio_add_callback(button1_spec.port, &button1_cb) < 0) {
-        LOG_ERR("Failed to add button callback");
-        return;
-    }
-    if (gpio_add_callback(button2_spec.port, &button2_cb) < 0) {
-        LOG_ERR("Failed to add button callback");
-        return;
-    }
+}
+//----------------------------------------------------------------------------------------------------------------------
+static void measurement_timer_callback(lv_timer_t* timer) {
+    measurement_perform();
 }
 //----------------------------------------------------------------------------------------------------------------------
 int main(void) {
     LOG_INF("Starting USB-PD PSU application");
-    const struct device* display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (!device_is_ready(display_dev)) {
-        LOG_ERR("Display device not ready, aborting");
-        return 0;
+
+    int err = measurement_init(measurement_callback, NULL);
+    if (err) {
+        LOG_ERR("Failed to initialize measurements: %d", err);
+        return err;
     }
-    LOG_INF("Display device ready");
 
-    create_ui();
-    configure_buttons();
+    size_t channel_count = measurement_get_channel_count();
+    if (channel_count == 0) {
+        LOG_ERR("No measurement channels defined");
+        return -1;
+    }
 
-    lv_timer_create(timer_callback, 200, NULL);
+    err = create_ui(measurement_get_channel_count());
+    if (err) {
+        LOG_ERR("Failed to create UI: %d", err);
+        return err;
+    }
 
-    lv_timer_handler();
-    display_blanking_off(display_dev);
+    err = buttons_init(buttons_activated_callback, NULL);
+    if (err) {
+        LOG_ERR("Failed to initialize buttons: %d", err);
+    }
+
+    lvgl_timer = lv_timer_create(measurement_timer_callback, 100, NULL);
+    if (!lvgl_timer) {
+        LOG_ERR("Failed to create LVGL timer");
+        return -1;
+    }
 
     while (1) {
         lv_timer_handler();

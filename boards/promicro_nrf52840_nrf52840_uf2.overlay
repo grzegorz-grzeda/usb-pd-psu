@@ -4,7 +4,7 @@
 	};
 	
 	chosen {
-		zephyr,display = &ssd1306_ssd1306_128x64;
+		zephyr,display = &display0;
 	};
 	
 	buttons {
@@ -35,7 +35,7 @@
 &i2c0{
 	status = "okay";
 	
-	ina0:ina219@40 {
+	sensor0:ina219@40 {
 		status = "okay";
 		compatible = "ti,ina219";
 		reg = <0x40>;
@@ -47,7 +47,7 @@
 		lsb-microamp = <10>;
 	};
 	
-	ina1:ina219@41 {
+	sensor1:ina219@41 {
 		status = "okay";
 		compatible = "ti,ina219";
 		reg = <0x41>;
@@ -59,7 +59,7 @@
 		lsb-microamp = <10>;
 	};
 	
-	ina2:ina219@44 {
+	sensor2:ina219@44 {
 		status = "okay";
 		compatible = "ti,ina219";
 		reg = <0x44>;
@@ -71,7 +71,7 @@
 		lsb-microamp = <10>;
 	};
 	
-	ssd1306_ssd1306_128x64: ssd1306@3c {
+	display0: ssd1306@3c {
 		compatible = "solomon,ssd1306fb";
 		reg = <0x3c>;
 		width = <128>;
