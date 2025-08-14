@@ -35,10 +35,10 @@
 &i2c0{
 	status = "okay";
 	
-	sensor0:ina219@40 {
+	sensor0:ina219@44 {
 		status = "okay";
 		compatible = "ti,ina219";
-		reg = <0x40>;
+		reg = <0x44>;
 		brng = <0>;
 		pg = <0>;
 		sadc = <13>;
@@ -59,10 +59,10 @@
 		lsb-microamp = <10>;
 	};
 	
-	sensor2:ina219@44 {
+	sensor2:ina219@40 {
 		status = "okay";
 		compatible = "ti,ina219";
-		reg = <0x44>;
+		reg = <0x40>;
 		brng = <0>;
 		pg = <0>;
 		sadc = <13>;
