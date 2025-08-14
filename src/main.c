@@ -33,120 +33,50 @@
 #include "measurement.h"
 #include "ui.h"
 //----------------------------------------------------------------------------------------------------------------------
-typedef struct {
-    lv_obj_t* channel_text_label;
-    lv_obj_t* voltage_label;
-    lv_obj_t* current_label;
-} ui_channel_labels_t;
-//----------------------------------------------------------------------------------------------------------------------
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 //----------------------------------------------------------------------------------------------------------------------
-static lv_obj_t* sensor_screen;
-static lv_obj_t* sensor_title_label;
-static ui_channel_labels_t* sensor_channel_labels = NULL;
+static ui_measurement_t ui_get_measurement_callback(size_t channel_index, void* userdata);
+static void measurement_timer_callback(struct k_timer* timer_id);
+static void measurement_work_handler(struct k_work* work);
+static measurement_channel_t* sensor_channels = NULL;
 static size_t sensor_channel_count = 0;
-static lv_timer_t* lvgl_timer;
-//----------------------------------------------------------------------------------------------------------------------
-extern const lv_img_dsc_t logo2_1b;
-//----------------------------------------------------------------------------------------------------------------------
-static void splash_timeout_cb(lv_timer_t* timer) {
-    lv_obj_t* screen_to_load = (lv_obj_t*)lv_timer_get_user_data(timer);
-    lv_screen_load(screen_to_load);
-}
-//----------------------------------------------------------------------------------------------------------------------
-static int create_ui(size_t screen_cnt) {
-    const struct device* display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (!device_is_ready(display_dev)) {
-        LOG_ERR("Display device not ready, aborting");
-        return -1;
-    }
-
-    if (screen_cnt == 0) {
-        LOG_ERR("No measurement channels defined");
-        return -1;
-    }
-
-    static lv_style_t style_dark;
-    lv_style_init(&style_dark);
-
-    lv_style_set_bg_color(&style_dark, lv_color_white());
-    lv_style_set_bg_opa(&style_dark, LV_OPA_100);
-
-    lv_style_set_text_color(&style_dark, lv_color_black());
-    lv_style_set_border_color(&style_dark, lv_color_black());
-    lv_style_set_outline_color(&style_dark, lv_color_black());
-
-    lv_obj_t* splash_screen = lv_obj_create(NULL);
-    lv_obj_add_style(splash_screen, &style_dark, 0);
-    lv_obj_t* logo = lv_img_create(splash_screen);
-    lv_img_set_src(logo, &logo2_1b);
-    lv_obj_center(logo);
-
-    sensor_channel_count = screen_cnt;
-    sensor_screen = lv_obj_create(NULL);
-    lv_obj_add_style(sensor_screen, &style_dark, 0);
-
-    sensor_title_label = lv_label_create(sensor_screen);
-    lv_label_set_text(sensor_title_label, "USB-PD PSU");
-    lv_obj_align(sensor_title_label, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_text_font(sensor_title_label, &lv_font_montserrat_14, 0);
-
-    sensor_channel_labels = calloc(sensor_channel_count, sizeof(ui_channel_labels_t));
-    if (!sensor_channel_labels) {
-        LOG_ERR("Failed to allocate memory for screens");
-        return -1;
-    }
-
-    for (size_t i = 0; i < sensor_channel_count; i++) {
-        size_t channel_index = (sensor_channel_count - i);
-        sensor_channel_labels[i].channel_text_label = lv_label_create(sensor_screen);
-        lv_label_set_text_fmt(sensor_channel_labels[i].channel_text_label, "CH%zu", channel_index);
-        lv_obj_align(sensor_channel_labels[i].channel_text_label, LV_ALIGN_TOP_LEFT, 0, channel_index * 15);
-        lv_obj_set_style_text_font(sensor_channel_labels[i].channel_text_label, &lv_font_montserrat_12, 0);
-
-        sensor_channel_labels[i].voltage_label = lv_label_create(sensor_screen);
-        lv_label_set_text(sensor_channel_labels[i].voltage_label, "? V");
-        lv_obj_align(sensor_channel_labels[i].voltage_label, LV_ALIGN_TOP_RIGHT, -50, channel_index * 15);
-        lv_obj_set_style_text_font(sensor_channel_labels[i].voltage_label, &lv_font_montserrat_12, 0);
-
-        sensor_channel_labels[i].current_label = lv_label_create(sensor_screen);
-        lv_label_set_text(sensor_channel_labels[i].current_label, "? A");
-        lv_obj_align(sensor_channel_labels[i].current_label, LV_ALIGN_TOP_RIGHT, 0, channel_index * 15);
-        lv_obj_set_style_text_font(sensor_channel_labels[i].current_label, &lv_font_montserrat_12, 0);
-    }
-
-    lv_screen_load(splash_screen);
-    lv_timer_create(splash_timeout_cb, CONFIG_USB_PD_PSU_UI_SPLASH_SCREEN_TIMEOUT_MS, sensor_screen);
-
-    lv_timer_handler();
-    display_blanking_off(display_dev);
-    return 0;
-}
+K_MUTEX_DEFINE(ui_mutex);
+K_TIMER_DEFINE(measurement_timer, measurement_timer_callback, NULL);
+K_WORK_DEFINE(measurement_work, measurement_work_handler);
 //----------------------------------------------------------------------------------------------------------------------
 static void buttons_activated_callback(int button_index, void* userdata) {}
+//----------------------------------------------------------------------------------------------------------------------
+static ui_measurement_t ui_get_measurement_callback(size_t channel_index, void* userdata) {
+    if (channel_index >= sensor_channel_count) {
+        LOG_ERR("Channel index out of bounds: %zu", channel_index);
+        return (ui_measurement_t){0};
+    }
+    k_mutex_lock(&ui_mutex, K_FOREVER);
+    ui_measurement_t measurement = {
+        .voltage = sensor_channels[channel_index].voltage,
+        .current = sensor_channels[channel_index].current,
+        .ok = sensor_channels[channel_index].ok,
+    };
+    k_mutex_unlock(&ui_mutex);
+    return measurement;
+}
 //----------------------------------------------------------------------------------------------------------------------
 static void measurement_callback(const measurement_channel_t* const channels, size_t channel_count, void* userdata) {
     if (channel_count != sensor_channel_count) {
         LOG_ERR("Channel count mismatch: expected %zu, got %zu", sensor_channel_count, channel_count);
         return;
     }
-
+    k_mutex_lock(&ui_mutex, K_FOREVER);
     for (size_t i = 0; i < channel_count; i++) {
-        if (!channels[i].ok) {
-            lv_label_set_text(sensor_channel_labels[i].voltage_label, "N/A");
-            lv_label_set_text(sensor_channel_labels[i].current_label, "N/A");
-            continue;
-        }
-        char buffer[32];
-        sprintf(buffer, "%.3f V", channels[i].voltage);
-        lv_label_set_text(sensor_channel_labels[i].voltage_label, buffer);
-        sprintf(buffer, "%.3f A", channels[i].current);
-        lv_label_set_text(sensor_channel_labels[i].current_label, buffer);
+        sensor_channels[i] = channels[i];
     }
+    k_mutex_unlock(&ui_mutex);
 }
 //----------------------------------------------------------------------------------------------------------------------
-static void measurement_timer_callback(lv_timer_t* timer) {
-    measurement_perform();
+static void measurement_work_handler(struct k_work* work) {}
+//----------------------------------------------------------------------------------------------------------------------
+static void measurement_timer_callback(struct k_timer* timer_id) {
+    k_work_submit(&measurement_work);
 }
 //----------------------------------------------------------------------------------------------------------------------
 int main(void) {
@@ -158,15 +88,26 @@ int main(void) {
         return err;
     }
 
-    size_t channel_count = measurement_get_channel_count();
-    if (channel_count == 0) {
+    sensor_channel_count = measurement_get_channel_count();
+    if (sensor_channel_count == 0) {
         LOG_ERR("No measurement channels defined");
         return -1;
     }
+    sensor_channels = calloc(sensor_channel_count, sizeof(measurement_channel_t));
+    if (!sensor_channels) {
+        LOG_ERR("Failed to allocate memory for sensor channels");
+        return -ENOMEM;
+    }
 
-    err = create_ui(measurement_get_channel_count());
+    ui_config_t ui_config = {
+        .measurement_channel_count = sensor_channel_count,
+        .get_measurement_callback = ui_get_measurement_callback,
+        .userdata = NULL,
+    };
+
+    err = ui_init(ui_config);
     if (err) {
-        LOG_ERR("Failed to create UI: %d", err);
+        LOG_ERR("Failed to initialize UI: %d", err);
         return err;
     }
 
@@ -174,15 +115,12 @@ int main(void) {
     if (err) {
         LOG_ERR("Failed to initialize buttons: %d", err);
     }
-
-    lvgl_timer = lv_timer_create(measurement_timer_callback, 100, NULL);
-    if (!lvgl_timer) {
-        LOG_ERR("Failed to create LVGL timer");
-        return -1;
-    }
+    k_timer_start(&measurement_timer, K_MSEC(200), K_MSEC(200));
 
     while (1) {
-        lv_timer_handler();
+        measurement_perform();
+
+        ui_loop();
         k_sleep(K_MSEC(10));
     }
 
