@@ -1,0 +1,10 @@
+menu "UI"
+
+config USB_PD_PSU_UI_SPLASH_SCREEN_TIMEOUT_MS
+    int "Splash Screen Timeout (ms)"
+    range 200 10000
+    default 1500
+    help
+        Set the duration for which the splash screen is displayed before transitioning to the main UI.
+
+endmenu 

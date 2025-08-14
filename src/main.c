@@ -35,30 +35,12 @@
 //----------------------------------------------------------------------------------------------------------------------
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 //----------------------------------------------------------------------------------------------------------------------
-static ui_measurement_t ui_get_measurement_callback(size_t channel_index, void* userdata);
-static void measurement_timer_callback(struct k_timer* timer_id);
-static void measurement_work_handler(struct k_work* work);
 static measurement_channel_t* sensor_channels = NULL;
+static ui_measurement_t* ui_measurements = NULL;
 static size_t sensor_channel_count = 0;
-K_MUTEX_DEFINE(ui_mutex);
-K_TIMER_DEFINE(measurement_timer, measurement_timer_callback, NULL);
-K_WORK_DEFINE(measurement_work, measurement_work_handler);
 //----------------------------------------------------------------------------------------------------------------------
-static void buttons_activated_callback(int button_index, void* userdata) {}
-//----------------------------------------------------------------------------------------------------------------------
-static ui_measurement_t ui_get_measurement_callback(size_t channel_index, void* userdata) {
-    if (channel_index >= sensor_channel_count) {
-        LOG_ERR("Channel index out of bounds: %zu", channel_index);
-        return (ui_measurement_t){0};
-    }
-    k_mutex_lock(&ui_mutex, K_FOREVER);
-    ui_measurement_t measurement = {
-        .voltage = sensor_channels[channel_index].voltage,
-        .current = sensor_channels[channel_index].current,
-        .ok = sensor_channels[channel_index].ok,
-    };
-    k_mutex_unlock(&ui_mutex);
-    return measurement;
+static void buttons_activated_callback(int button_index, void* userdata) {
+    ui_update_button_pressed(button_index);
 }
 //----------------------------------------------------------------------------------------------------------------------
 static void measurement_callback(const measurement_channel_t* const channels, size_t channel_count, void* userdata) {
@@ -66,17 +48,12 @@ static void measurement_callback(const measurement_channel_t* const channels, si
         LOG_ERR("Channel count mismatch: expected %zu, got %zu", sensor_channel_count, channel_count);
         return;
     }
-    k_mutex_lock(&ui_mutex, K_FOREVER);
     for (size_t i = 0; i < channel_count; i++) {
-        sensor_channels[i] = channels[i];
+        ui_measurements[i].voltage = channels[i].voltage;
+        ui_measurements[i].current = channels[i].current;
+        ui_measurements[i].ok = channels[i].ok;
+        ui_update_measurements(ui_measurements, channel_count);
     }
-    k_mutex_unlock(&ui_mutex);
-}
-//----------------------------------------------------------------------------------------------------------------------
-static void measurement_work_handler(struct k_work* work) {}
-//----------------------------------------------------------------------------------------------------------------------
-static void measurement_timer_callback(struct k_timer* timer_id) {
-    k_work_submit(&measurement_work);
 }
 //----------------------------------------------------------------------------------------------------------------------
 int main(void) {
@@ -98,11 +75,15 @@ int main(void) {
         LOG_ERR("Failed to allocate memory for sensor channels");
         return -ENOMEM;
     }
+    ui_measurements = calloc(sensor_channel_count, sizeof(ui_measurement_t));
+    if (!ui_measurements) {
+        LOG_ERR("Failed to allocate memory for UI measurements");
+        free(sensor_channels);
+        return -ENOMEM;
+    }
 
     ui_config_t ui_config = {
         .measurement_channel_count = sensor_channel_count,
-        .get_measurement_callback = ui_get_measurement_callback,
-        .userdata = NULL,
     };
 
     err = ui_init(ui_config);
@@ -115,13 +96,12 @@ int main(void) {
     if (err) {
         LOG_ERR("Failed to initialize buttons: %d", err);
     }
-    k_timer_start(&measurement_timer, K_MSEC(200), K_MSEC(200));
 
     while (1) {
         measurement_perform();
-
         ui_loop();
-        k_sleep(K_MSEC(10));
+
+        k_sleep(K_MSEC(CONFIG_USB_PD_PSU_MAIN_LOOP_DELAY_MS));
     }
 
     return 0;

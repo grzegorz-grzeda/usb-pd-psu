@@ -29,6 +29,8 @@
 #include <stdlib.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/logging/log.h>
+#include "app_version.h"
+#include "zephyr/version.h"
 //----------------------------------------------------------------------------------------------------------------------
 typedef struct {
     lv_obj_t* channel_text_label;
@@ -41,29 +43,11 @@ extern const lv_img_dsc_t logo2_1b;
 static lv_obj_t* measurement_screen;
 static lv_obj_t* measurement_title_label;
 static ui_channel_labels_t* measurement_channel_labels = NULL;
-static lv_timer_t* lvgl_timer;
 static ui_config_t ui_config = {0};
+static lv_obj_t* settings_screen = NULL;
+static lv_obj_t* info_screen = NULL;
 //----------------------------------------------------------------------------------------------------------------------
 LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
-//----------------------------------------------------------------------------------------------------------------------
-static void ui_measurement_timer_callback(lv_timer_t* timer) {
-    if (!ui_config.get_measurement_callback) {
-        return;
-    }
-    for (size_t i = 0; i < ui_config.measurement_channel_count; i++) {
-        ui_measurement_t measurement = ui_config.get_measurement_callback(i, ui_config.userdata);
-        if (!measurement.ok) {
-            lv_label_set_text(measurement_channel_labels[i].voltage_label, "N/A V");
-            lv_label_set_text(measurement_channel_labels[i].current_label, "N/A A");
-            continue;
-        }
-        char buffer[32];
-        sprintf(buffer, "%.3f V", measurement.voltage);
-        lv_label_set_text(measurement_channel_labels[i].voltage_label, buffer);
-        sprintf(buffer, "%.3f A", measurement.current);
-        lv_label_set_text(measurement_channel_labels[i].current_label, buffer);
-    }
-}
 //----------------------------------------------------------------------------------------------------------------------
 static void screen_to_load_after_timeout_cb(lv_timer_t* timer) {
     lv_obj_t* screen_to_load = (lv_obj_t*)lv_timer_get_user_data(timer);
@@ -107,10 +91,6 @@ int ui_init(ui_config_t config) {
         LOG_ERR("Channel count must be greater than 0");
         return -1;
     }
-    if (config.get_measurement_callback == NULL) {
-        LOG_ERR("Measurement callback must not be NULL");
-        return -1;
-    }
 
     ui_config = config;
 
@@ -146,11 +126,39 @@ int ui_init(ui_config_t config) {
         lv_obj_set_style_text_font(measurement_channel_labels[i].current_label, &lv_font_montserrat_12, 0);
     }
 
-    lvgl_timer = lv_timer_create(ui_measurement_timer_callback, 250, NULL);
-    if (!lvgl_timer) {
-        LOG_ERR("Failed to create LVGL timer");
-        return -1;
-    }
+    settings_screen = lv_obj_create(NULL);
+    set_default_style_for(settings_screen);
+    lv_obj_t* settings_title_label = lv_label_create(settings_screen);
+    lv_label_set_text(settings_title_label, "Settings");
+    lv_obj_align(settings_title_label, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_text_font(settings_title_label, &lv_font_montserrat_14, 0);
+
+    info_screen = lv_obj_create(NULL);
+    set_default_style_for(info_screen);
+    lv_obj_t* info_title_label = lv_label_create(info_screen);
+    lv_label_set_text(info_title_label, "Info");
+    lv_obj_align(info_title_label, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_text_font(info_title_label, &lv_font_montserrat_14, 0);
+
+    lv_obj_t* app_version_label = lv_label_create(info_screen);
+    char version_text[64];
+    sprintf(version_text, "App: %s", APP_VERSION_EXTENDED_STRING);
+    lv_label_set_text(app_version_label, version_text);
+    lv_obj_align(app_version_label, LV_ALIGN_TOP_LEFT, 0, 15);
+    lv_obj_set_style_text_font(app_version_label, &lv_font_montserrat_12, 0);
+
+    sprintf(version_text, "Zephyr: %s", KERNEL_VERSION_EXTENDED_STRING);
+    lv_obj_t* zephyr_version_label = lv_label_create(info_screen);
+    lv_label_set_text(zephyr_version_label, version_text);
+    lv_obj_align(zephyr_version_label, LV_ALIGN_TOP_LEFT, 0, 30);
+    lv_obj_set_style_text_font(zephyr_version_label, &lv_font_montserrat_12, 0);
+
+    lv_obj_t* lvgl_version_label = lv_label_create(info_screen);
+    sprintf(version_text, "LVGL: %d.%d.%d %s", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
+            LVGL_VERSION_INFO);
+    lv_label_set_text(lvgl_version_label, version_text);
+    lv_obj_align(lvgl_version_label, LV_ALIGN_TOP_LEFT, 0, 45);
+    lv_obj_set_style_text_font(lvgl_version_label, &lv_font_montserrat_12, 0);
 
     render_splash_screen();
     display_blanking_off(display_dev);
@@ -159,7 +167,36 @@ int ui_init(ui_config_t config) {
     return 0;
 }
 //----------------------------------------------------------------------------------------------------------------------
+int ui_update_measurements(ui_measurement_t* measurements, size_t channel_count) {
+    if (!measurements || channel_count == 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < channel_count; i++) {
+        if (!measurements[i].ok) {
+            lv_label_set_text(measurement_channel_labels[i].voltage_label, "N/A V");
+            lv_label_set_text(measurement_channel_labels[i].current_label, "N/A A");
+            continue;
+        }
+        char buffer[32];
+        sprintf(buffer, "%.3f V", measurements[i].voltage);
+        lv_label_set_text(measurement_channel_labels[i].voltage_label, buffer);
+        sprintf(buffer, "%.3f A", measurements[i].current);
+        lv_label_set_text(measurement_channel_labels[i].current_label, buffer);
+    }
+    return 0;
+}
+//----------------------------------------------------------------------------------------------------------------------
 int ui_update_button_pressed(int button_index) {
+    if (button_index == 0) {
+        lv_screen_load(measurement_screen);
+    } else if (button_index == 1) {
+        lv_screen_load(settings_screen);
+    } else if (button_index == 2) {
+        lv_screen_load(info_screen);
+    } else {
+        LOG_ERR("Invalid button index: %d", button_index);
+        return -1;
+    }
     return 0;
 }
 //----------------------------------------------------------------------------------------------------------------------

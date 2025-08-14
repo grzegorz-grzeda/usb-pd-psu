@@ -1,0 +1,12 @@
+menu "Main"
+
+config USB_PD_PSU_MAIN_LOOP_DELAY_MS
+    int "Main Loop Delay (ms)"
+    range 10 1000
+    default 10
+    help
+        Set the delay for the main loop in milliseconds. This controls how often the main loop runs.
+
+endmenu
+
+rsource "ui/Kconfig"
