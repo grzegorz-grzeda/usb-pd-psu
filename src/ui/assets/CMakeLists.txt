@@ -25,9 +25,5 @@ target_include_directories(app
 )
 
 target_sources(app 
-    PRIVATE main.c
+    PRIVATE logo2_1b.c
 )
-
-add_subdirectory(ui)
-add_subdirectory(buttons)
-add_subdirectory(measurement)
